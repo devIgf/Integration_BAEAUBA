@@ -10,20 +10,9 @@ use Illuminate\Support\Facades\Validator;
 
 class IntegrationController extends Controller
 {
-    //storage/app/public/data.json.
-    // Fonction pour convertir les millisecondes en date
-    private function convertMillisecondsToDate($milliseconds) {
-        // Convertir les millisecondes en secondes
-        $seconds = $milliseconds / 1000;
-
-        // Convertir les secondes en date
-        return date('Y-m-d H:i:s', $seconds);
-    }
 
 
-
-
-    public function importJson(Request $request)
+public function importJson(Request $request)
     {
         $file = $request->file('json_file');
         $data = json_decode(file_get_contents($file), true);
@@ -36,15 +25,15 @@ class IntegrationController extends Controller
             $batch = [];
             $groupedEntries = [];
 
-            // Récupérer la valeur maximale actuelle de EC_No
+            // Recuperer la valeur maximale actuelle de EC_No
             $nextECNo = DB::table('F_ECRITUREC')->max('EC_No') + 1;
 
             foreach ($data as $entry) {
                 try {
-                    // Vérifier et corriger JO_Num
+                    // Verifier et corriger JO_Num
                     $JO_Num = empty($entry['JO_Num']) ? "VTED" : (string) $entry['JO_Num'];
                     if ($JO_Num !== "VTED") {
-                        throw new \Exception('JO_Num doit etre égal à "VTED".');
+                        throw new \Exception('JO_Num doit etre egal à "VTED".');
                     }
 
                     // Convertir les dates en millisecondes au format de date
@@ -52,19 +41,42 @@ class IntegrationController extends Controller
                     $EC_Date = Carbon::createFromTimestampMs($entry['EC_Date'])->startOfMonth()->toDateTimeString();
                     $EC_Echeance = Carbon::createFromTimestampMs($entry['EC_Echeance'])->toDateTimeString();
 
-                    // EC_Piece doit prendre le numéro du mois de JM_Date
+                    // EC_Piece doit prendre le numero du mois de JM_Date
                     $EC_Piece = Carbon::createFromTimestampMs($entry['JM_Date'])->month;
 
-                    // Vérifier que CG_Num n'est pas vide
+                    // Verifier que CG_Num n'est pas vide
                     if (empty($entry['CG_Num'])) {
                         throw new \Exception('CG_Num ne doit pas etre vide.');
                     }
                     $CG_Num = (string) $entry['CG_Num'];
 
-                    // Vérifier que CT_Num est présent dans la table F_CompteT si fourni
+                    // Verifier que CT_Num est present dans la table F_CompteT si fourni
                     $CT_Num = empty($entry['CT_Num']) ? NULL : (string)$entry['CT_Num'];
-                    if ($CT_Num !== NULL && !DB::table('F_CompteT')->where('CT_Num', $CT_Num)->exists()) {
-                        throw new \Exception('CT_Num non trouve dans F_CompteT.');
+                    if ($CT_Num !== NULL) {
+                        $compte = DB::table('F_CompteT')->where('CT_Num', $CT_Num)->first();
+
+                        if (!$compte) {
+                            throw new \Exception('CT_Num non trouve dans F_CompteT.');
+                        }
+
+                        if ($compte->CT_Prospect == 1) {
+                            DB::table('F_CompteT')
+                                ->where('CT_Num', $CT_Num)
+                                ->update(['CT_Prospect' => 0]);
+                        }
+                    }
+
+                    // Verifier si JM_Date existe dans la table F_JMOUV
+                    $jmouv = DB::table('F_JMOUV')->where('JM_Date', $JM_Date)->first();
+
+                    // Si JM_Date n'existe pas, inserer une nouvelle ligne dans F_JMOUV
+                    if (!$jmouv) {
+                        DB::table('F_JMOUV')->insert([
+                            'JO_Num' => $JO_Num,
+                            'JM_Date' => $JM_Date,
+                            'JM_Cloture' => 0,
+                            'JM_Impression' => 0
+                        ]);
                     }
 
                     // Limiter la longueur de EC_Intitule à 67 caractères
@@ -84,7 +96,7 @@ class IntegrationController extends Controller
                         'EC_Echeance' => $EC_Echeance,
                         'EC_Sens' => $entry['EC_Sens'],
                         'EC_Montant' => (string) $entry['EC_Montant'],
-                        // Les colonnes ajoutées
+                        // Les colonnes ajoutees
                         'EC_NoLink' => 0,
                         'EC_TresoPiece' => '',
                         'N_Reglement' => 0,
@@ -130,13 +142,13 @@ class IntegrationController extends Controller
                         'SAC_Id' => '00000000-0000-0000-0000-000000000000'
                     ];
 
-                    // Grouper les entrées par EC_RefPiece pour vérification
+                    // Grouper les entrees par EC_RefPiece pour verification
                     $groupedEntries[$row['EC_RefPiece']][] = $row;
 
                     // Ajouter la ligne au batch
                     $batch[] = $row;
 
-                    // Insérer le batch lorsque la taille atteint $batchSize
+                    // Inserer le batch lorsque la taille atteint $batchSize
                     if (count($batch) >= $batchSize) {
                         $this->insertBatch($batch, $errorLogs);
                         $batch = [];
@@ -146,7 +158,7 @@ class IntegrationController extends Controller
                 }
             }
 
-            // Insérer les lignes restantes si le batch est non vide
+            // Inserer les lignes restantes si le batch est non vide
             if (!empty($batch)) {
                 $this->insertBatch($batch, $errorLogs);
             }
@@ -158,22 +170,23 @@ class IntegrationController extends Controller
                 file_put_contents(storage_path('logs/error_logs.json'), json_encode($errorLogs, JSON_PRETTY_PRINT));
             }
 
-            // Vérifier si le fichier de log d'erreurs a été créé
+            // Verifier si le fichier de log d'erreurs a ete cre
             if (file_exists(storage_path('logs/error_logs.json'))) {
-                return redirect()->back()->with('success', 'Données importées avec succès, avec quelques erreurs.');
+                return redirect()->back()->with('error', 'Donnees importees avec quelques erreurs.');
             } else {
-                return redirect()->back()->with('success', 'Données importées avec succès.');
+                return redirect()->back()->with('success', 'Donnees importees avec succès.');
             }
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Erreur lors de l\'importation des données : ' . $e->getMessage());
-            return redirect()->back()->with('error', 'Erreur lors de l\'importation des données : ' . $e->getMessage());
+            Log::error('Erreur lors de l\'importation des donnees : ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Erreur lors de l\'importation des donnees : ' . $e->getMessage());
         }
     }
 
-    private function insertBatch(&$batch, &$errorLogs)
+
+private function insertBatch(&$batch, &$errorLogs)
     {
-        // Vérifier l'équilibre des montants pour chaque EC_RefPiece
+        // Verifier l'equilibre des montants pour chaque EC_RefPiece
         $groupedEntries = collect($batch)->groupBy('EC_RefPiece');
         $validEntries = [];
 
@@ -184,7 +197,7 @@ class IntegrationController extends Controller
             if ($sumDebit == $sumCredit) {
                 $validEntries = array_merge($validEntries, $entries->toArray());
             } else {
-                $errorLogs[] = ['EC_RefPiece' => $refPiece, 'error' => 'Somme des montants débiteurs et créditeurs ne correspond pas'];
+                $errorLogs[] = ['EC_RefPiece' => $refPiece, 'error' => 'Somme des montants debiteurs et crediteurs ne correspond pas'];
             }
         }
 
@@ -192,7 +205,7 @@ class IntegrationController extends Controller
             DB::table('F_ECRITUREC')->insert($validEntries);
         }
 
-        // Réinitialiser le batch après l'insertion
+        // Reinitialiser le batch après l'insertion
         $batch = [];
     }
 
